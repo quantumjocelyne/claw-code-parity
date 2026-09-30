@@ -2,6 +2,8 @@
 
 Date: 2026-04-01
 
+Targeted reconciliation: 2026-10-01 against main `8805386` (skills, plan/worktree tools, hooks, and plugins). Other gaps and historical line references have not been re-audited.
+
 Scope compared:
 - Upstream TypeScript: `/home/bellman/Workspace/claude-code/src/`
 - Rust port: `rust/crates/`
@@ -21,13 +23,13 @@ The Rust port has a solid core for:
 - CLAUDE.md discovery
 - MCP config parsing/bootstrap primitives
 
-But it is still materially behind the TypeScript implementation in six major areas:
+But it is still materially behind the TypeScript implementation in the following areas:
 1. **Tools surface area** is much smaller.
-2. **Hook execution** is largely missing; Rust mostly loads hook config but does not run a TS-style PreToolUse/PostToolUse pipeline.
-3. **Plugins** are effectively absent in Rust.
-4. **Skills** are only partially implemented in Rust via direct `SKILL.md` loading; there is no comparable skills command/discovery/registration surface.
+2. **Hooks** execute PreToolUse/PostToolUse/PostToolUseFailure; broader upstream event parity remains incomplete.
+3. **Plugins** have a Rust crate, management commands, and runtime integration; full upstream parity is not established.
+4. **Skills** support direct `SKILL.md` loading plus `/skills` list/install/help and local discovery; bundled/MCP skill registry parity remains incomplete.
 5. **CLI** breadth is much narrower in Rust.
-6. **Assistant/tool orchestration** lacks the richer streaming concurrency, hook integration, and orchestration behavior present in TS.
+6. **Assistant/tool orchestration** lacks the richer streaming concurrency and orchestration behavior present in TS.
 7. **Services** in Rust cover API/auth/runtime basics, but many higher-level TS services are missing.
 
 ## Critical bug status on this branch
@@ -61,10 +63,10 @@ Build/test/manual verification is tracked separately below and must pass before 
 
 ### Rust currently has
 - A single MVP registry in `rust/crates/tools/src/lib.rs:53-371`.
-- Implemented tools include `bash`, `read_file`, `write_file`, `edit_file`, `glob_search`, `grep_search`, `WebFetch`, `WebSearch`, `TodoWrite`, `Skill`, `Agent`, `ToolSearch`, `NotebookEdit`, `Sleep`, `SendUserMessage`, `Config`, `StructuredOutput`, `REPL`, `PowerShell`.
+- Implemented tools include `bash`, `read_file`, `write_file`, `edit_file`, `glob_search`, `grep_search`, `WebFetch`, `WebSearch`, `TodoWrite`, `Skill`, `Agent`, `ToolSearch`, `NotebookEdit`, `Sleep`, `SendUserMessage`, `Config`, `StructuredOutput`, `REPL`, `PowerShell`, `EnterPlanMode`, `ExitPlanMode`.
 
 ### Missing or broken in Rust
-- **Missing large chunks of the upstream tool catalog**: I did not find Rust equivalents for AskUserQuestion, MCP resource listing/reading tools, plan/worktree entry/exit tools, task management tools, remote trigger, synthetic output, or schedule/cron tools.
+- **Missing large chunks of the upstream tool catalog**: I did not find Rust equivalents for AskUserQuestion, MCP resource listing/reading tools, worktree entry/exit tools (`EnterWorktree`/`ExitWorktree`), task management tools, remote trigger, synthetic output, or schedule/cron tools.
 - **Tool decomposition is much coarser**: TS isolates tool-specific validation/security/UI behavior per tool module; Rust centralizes almost everything in one file (`rust/crates/tools/src/lib.rs`).
 - **Likely parity impact**: lower fidelity tool prompting, weaker per-tool behavior specialization, and fewer native tool choices exposed to the model.
 
@@ -83,17 +85,12 @@ Build/test/manual verification is tracked separately below and must pass before 
   - `src/commands/hooks/index.ts:5-8`
 
 ### Rust currently has
-- Hook data is **loaded/merged from config** and visible in reports:
-  - `rust/crates/runtime/src/config.rs:786-797,829-838`
-  - `rust/crates/rusty-claude-cli/src/main.rs:1665-1669`
-- The system prompt acknowledges user-configured hooks:
-  - `rust/crates/runtime/src/prompt.rs:452-459`
+- Config loading/merging and an executable hook runner in `rust/crates/runtime/src/hooks.rs`.
+- PreToolUse, PostToolUse, and PostToolUseFailure integrated into `rust/crates/runtime/src/conversation.rs`; pre-hooks can update input or affect permission decisions, with failure/cancellation handling and hook feedback.
 
 ### Missing or broken in Rust
-- **No comparable hook execution pipeline found** in the Rust runtime conversation/tool execution path.
-- `rust/crates/runtime/src/conversation.rs:151-208` goes straight from assistant tool_use -> permission check -> tool execute -> tool_result, without TS-style PreToolUse/PostToolUse processing.
-- I did **not** find Rust counterparts to TS files like `toolHooks.ts` or `PermissionContext.ts` that execute hook callbacks and alter/block tool behavior.
-- Result: Rust appears to support **hook configuration visibility**, but not full **hook behavior parity**.
+- **Broader hook event parity remains incomplete**: the Rust `HookEvent` enum contains only those three events; a PermissionRequest hook event is not implemented (the permission request type itself does exist).
+- Executable tool hooks are present; full upstream hook behavior parity is not established.
 
 ---
 
@@ -109,14 +106,13 @@ Build/test/manual verification is tracked separately below and must pass before 
   - `src/services/plugins/pluginCliCommands.ts:7,36`
 
 ### Rust currently has
-- I did **not** find a dedicated plugin crate/module/handler under `rust/crates/`.
-- The Rust crate layout is only `api`, `commands`, `compat-harness`, `runtime`, `rusty-claude-cli`, and `tools`.
+- A dedicated `rust/crates/plugins/` crate with discovery, manifest validation, install/update/uninstall, enable/disable, registry, and lifecycle support in `src/lib.rs`.
+- `/plugin` (aliases `/plugins`, `/marketplace`) with list/install/enable/disable/uninstall/update in `rust/crates/commands/src/lib.rs`.
+- Plugin tool/hook aggregation, initialization/shutdown, and runtime reload after management changes in `rust/crates/rusty-claude-cli/src/main.rs`.
 
 ### Missing or broken in Rust
-- **Plugin loading/install/update/validation is missing.**
-- **No plugin CLI surface found** comparable to `claude plugin ...`.
-- **No plugin runtime refresh/reconciliation layer found**.
-- This is one of the largest parity gaps.
+- **No top-level plugin CLI subcommand** comparable to `claude plugin ...` in `rust/crates/rusty-claude-cli/src/args.rs`; slash-command management is implemented.
+- Full upstream plugin parity is not established; loading, management, validation, and runtime integration are no longer absent.
 
 ---
 
@@ -136,11 +132,11 @@ Build/test/manual verification is tracked separately below and must pass before 
   - `rust/crates/tools/src/lib.rs:1288-1323`
 - CLAUDE.md / instruction discovery exists in runtime prompt loading:
   - `rust/crates/runtime/src/prompt.rs:203-208`
+- `/skills` supports list (also the default action), install `<path>`, and help, with local skill-root discovery in `rust/crates/commands/src/lib.rs`.
 
 ### Missing or broken in Rust
-- **No Rust `/skills` slash command** in `rust/crates/commands/src/lib.rs:41-166`.
 - **No visible bundled-skill registry equivalent** to TS `bundledSkills.ts` / `loadSkillsDir.ts` / `mcpSkillBuilders.ts`.
-- Current Rust skill support is closer to **direct file loading** than full upstream **skill discovery/registration/command integration**.
+- Rust supports **direct file loading, local discovery, installation, and command integration**; full upstream bundled/MCP skill registration parity remains incomplete.
 
 ---
 
@@ -162,7 +158,7 @@ Build/test/manual verification is tracked separately below and must pass before 
 
 ### Rust currently has
 - Minimal top-level subcommands in `rust/crates/rusty-claude-cli/src/args.rs:29-39` and `rust/crates/rusty-claude-cli/src/main.rs:67-90,242-261`.
-- Slash command surface is 15 commands total in `rust/crates/commands/src/lib.rs:41-166,389`.
+- Slash commands are defined in `rust/crates/commands/src/lib.rs` (`SLASH_COMMAND_SPECS`), including `/skills` and plugin management.
 
 ### Missing or broken in Rust
 - **Missing major CLI subcommand families**: agents, plugins, mcp management, auto-mode tooling, and many other TS commands.
@@ -189,7 +185,7 @@ Build/test/manual verification is tracked separately below and must pass before 
 
 ### Missing or broken in Rust
 - **No TS-style streaming tool executor** with sibling cancellation / fallback discard semantics.
-- **No integrated PreToolUse/PostToolUse hook participation** in assistant execution.
+- **PreToolUse/PostToolUse/PostToolUseFailure hooks participate** in assistant execution via `rust/crates/runtime/src/conversation.rs`.
 - **No comparable orchestration layer for richer tool event semantics** found.
 - Historically broken parity items in prompt mode were:
   - prompt tool enablement (`main.rs:75-82`) — now fixed on this branch
@@ -222,7 +218,7 @@ Build/test/manual verification is tracked separately below and must pass before 
   - session compaction/runtime usage: `rust/crates/runtime/src/compact.rs`, `rust/crates/runtime/src/usage.rs`
 
 ### Missing or broken in Rust
-- **Missing many higher-level services**: analytics, plugin services, prompt suggestion, team memory sync, richer LSP service management, notifier/tips ecosystem, and much of the surrounding product/service scaffolding.
+- **Missing many higher-level services**: analytics, prompt suggestion, team memory sync, richer LSP service management, notifier/tips ecosystem, and much of the surrounding product/service scaffolding.
 - Rust is closer to a **runtime/API core** than a full parity implementation of the TS service layer.
 
 ---
@@ -230,11 +226,10 @@ Build/test/manual verification is tracked separately below and must pass before 
 ## Highest-priority parity gaps after the critical bug fixes
 
 1. **Hook execution parity**
-   - Config exists, execution does not appear to.
-   - This affects permissions, tool interception, and continuation behavior.
+   - Tool-hook execution exists; broader upstream event coverage (including PermissionRequest hooks) remains incomplete.
 
 2. **Plugin system parity**
-   - Entire install/load/manage surface appears missing.
+   - Install/load/manage and runtime integration exist; remaining upstream parity needs a focused comparison.
 
 3. **CLI breadth parity**
    - Missing many upstream command families and remote transports.
@@ -248,6 +243,6 @@ Build/test/manual verification is tracked separately below and must pass before 
 ## Recommended next work after current critical fixes
 
 1. Finish build/test/manual verification of the critical bug patch.
-2. Implement **hook execution** before broadening the tool surface further.
-3. Decide whether **plugins** are in-scope for parity; if yes, this likely needs dedicated design work, not a small patch.
+2. Extend **hook event parity** beyond the implemented tool-hook pipeline.
+3. Assess remaining **plugin parity** against the implemented Rust crate and slash commands.
 4. Expand the CLI/tool matrix deliberately rather than adding one-off commands without shared orchestration support.
